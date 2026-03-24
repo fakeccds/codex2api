@@ -658,12 +658,14 @@ function TestConnectionModal({
   const abortRef = useRef<AbortController | null>(null)
   const outputEndRef = useRef<HTMLDivElement>(null)
   const settledRef = useRef(false)
+  const onSettledRef = useRef(onSettled)
+  onSettledRef.current = onSettled
 
   const markSettled = useCallback(() => {
     if (settledRef.current) return
     settledRef.current = true
-    onSettled()
-  }, [onSettled])
+    onSettledRef.current()
+  }, [])
 
   useEffect(() => {
     // 重置状态（StrictMode 二次 mount 时清理上一次的残留）
