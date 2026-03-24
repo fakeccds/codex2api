@@ -14,7 +14,6 @@ import { formatRelativeTime } from '../utils/time'
 export default function Accounts() {
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState<AddAccountRequest>({
-    name: '',
     refresh_token: '',
     proxy_url: '',
   })
@@ -41,7 +40,7 @@ export default function Accounts() {
       const result = await api.addAccount(addForm)
       showToast(result.message || '账号添加成功')
       setShowAdd(false)
-      setAddForm({ name: '', refresh_token: '', proxy_url: '' })
+      setAddForm({ refresh_token: '', proxy_url: '' })
       void reload()
     } catch (error) {
       showToast(`添加失败: ${getErrorMessage(error)}`, 'error')
@@ -160,17 +159,6 @@ export default function Accounts() {
           </>
         )}
       >
-        <div className="form-group">
-          <label>名称（可选）</label>
-          <input
-            className="form-input"
-            placeholder="例如：account-1"
-            value={addForm.name}
-            onChange={(event: ChangeEvent<HTMLInputElement>) =>
-              setAddForm((form) => ({ ...form, name: event.target.value }))
-            }
-          />
-        </div>
         <div className="form-group">
           <label>Refresh Token *</label>
           <textarea
