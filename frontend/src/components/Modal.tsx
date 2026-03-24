@@ -19,8 +19,8 @@ export default function Modal({ show, title, onClose, children, footer }: ModalP
   return (
     <Dialog open={show} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent className="sm:max-w-[520px]">
-        <DialogHeader>
-          <DialogTitle className="text-xl">{title}</DialogTitle>
+        <DialogHeader className="pr-6">
+          <DialogTitle className="text-xl break-all">{title}</DialogTitle>
         </DialogHeader>
         <div className="py-2">{children}</div>
         {footer ? <DialogFooter>{footer}</DialogFooter> : null}

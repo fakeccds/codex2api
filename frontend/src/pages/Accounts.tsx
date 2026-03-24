@@ -517,22 +517,26 @@ function TestConnectionModal({ account, onClose }: { account: AccountRow; onClos
         </Button>
       }
     >
-      <div className="space-y-3">
+      <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <span className={`text-sm font-semibold ${statusColor}`}>{statusLabel}</span>
-          {model && <span className="text-xs font-mono text-muted-foreground">{model}</span>}
+          <span className={`text-sm font-semibold flex items-center gap-1.5 ${statusColor}`}>
+            {statusLabel}
+          </span>
+          {model && <span className="text-xs font-mono px-2 py-0.5 rounded-md bg-muted text-muted-foreground">{model}</span>}
         </div>
 
-        <div className="min-h-[120px] max-h-[300px] overflow-auto rounded-xl border border-border bg-muted/30 p-3 text-sm leading-relaxed font-mono whitespace-pre-wrap">
-          {output.length === 0 && status === 'connecting' && (
-            <span className="text-muted-foreground animate-pulse">正在发送测试请求...</span>
-          )}
-          {output.join('')}
-          <div ref={outputEndRef} />
-        </div>
+        {(output.length > 0 || status === 'connecting' || status === 'streaming') && (
+          <div className="min-h-[80px] max-h-[240px] overflow-auto rounded-xl border border-border bg-muted/30 p-3 text-sm leading-relaxed font-mono whitespace-pre-wrap">
+            {output.length === 0 && status === 'connecting' && (
+              <span className="text-muted-foreground animate-pulse">正在发送测试请求...</span>
+            )}
+            {output.join('')}
+            <div ref={outputEndRef} />
+          </div>
+        )}
 
         {errorMsg && (
-          <div className="rounded-xl border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm text-red-600 dark:text-red-400">
+          <div className="rounded-xl border border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30 p-3.5 text-sm text-red-600 dark:text-red-400 break-words leading-relaxed">
             {errorMsg}
           </div>
         )}
