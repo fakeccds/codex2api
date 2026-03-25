@@ -137,6 +137,7 @@ export interface SystemSettings {
   auto_clean_unauthorized: boolean
   auto_clean_rate_limited: boolean
   admin_secret: string
+  auto_clean_full_usage: boolean
 }
 
 export interface UsageStats {

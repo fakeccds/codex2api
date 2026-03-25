@@ -778,6 +778,7 @@ function TestConnectionModal({
       try {
         const res = await fetch(`/api/admin/accounts/${account.id}/test`, {
           signal: controller.signal,
+          headers: getAdminKey() ? { 'X-Admin-Key': getAdminKey() } : {},
         })
 
         if (!res.ok) {

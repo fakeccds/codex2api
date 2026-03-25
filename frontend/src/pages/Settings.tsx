@@ -47,6 +47,7 @@ export default function Settings() {
     auto_clean_unauthorized: false,
     auto_clean_rate_limited: false,
     admin_secret: '',
+    auto_clean_full_usage: false,
   })
   const [savingSettings, setSavingSettings] = useState(false)
   const [modelList, setModelList] = useState<string[]>([])
@@ -362,6 +363,17 @@ export default function Settings() {
                 />
                 <p className="text-xs text-muted-foreground mt-1">
                   开启后，后台每 30 秒巡检一次，发现运行时为 rate_limited 的账号会自动从号池中清理。
+                </p>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-semibold text-muted-foreground">自动清理用量满账号</label>
+                <Select
+                  value={settingsForm.auto_clean_full_usage ? 'true' : 'false'}
+                  onValueChange={(value) => setSettingsForm((f) => ({ ...f, auto_clean_full_usage: value === 'true' }))}
+                  options={booleanOptions}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  开启后，后台每 5 分钟巡检一次，用量 ≥ 100% 的账号会自动清理。正在处理请求的账号不会被清理。
                 </p>
               </div>
             </div>

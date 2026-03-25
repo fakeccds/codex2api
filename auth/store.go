@@ -635,6 +635,7 @@ type Store struct {
 	recoveryProbeBatch    atomic.Bool
 	autoCleanUnauthorized atomic.Bool
 	autoCleanRateLimited  atomic.Bool
+	autoCleanFullUsage    atomic.Bool
 	autoCleanupBatch      atomic.Bool
 	stopCh                chan struct{}
 	wg                    sync.WaitGroup
@@ -661,6 +662,7 @@ func NewStore(db *database.DB, tc *cache.TokenCache, settings *database.SystemSe
 	s.testModel.Store(settings.TestModel)
 	s.autoCleanUnauthorized.Store(settings.AutoCleanUnauthorized)
 	s.autoCleanRateLimited.Store(settings.AutoCleanRateLimited)
+	s.autoCleanFullUsage.Store(settings.AutoCleanFullUsage)
 	return s
 }
 
@@ -696,6 +698,16 @@ func (s *Store) GetAutoCleanRateLimited() bool {
 // SetAutoCleanRateLimited 设置是否自动清理 429 账号
 func (s *Store) SetAutoCleanRateLimited(enabled bool) {
 	s.autoCleanRateLimited.Store(enabled)
+}
+
+// GetAutoCleanFullUsage 获取是否自动清理用量满的账号
+func (s *Store) GetAutoCleanFullUsage() bool {
+	return s.autoCleanFullUsage.Load()
+}
+
+// SetAutoCleanFullUsage 设置是否自动清理用量满的账号
+func (s *Store) SetAutoCleanFullUsage(enabled bool) {
+	s.autoCleanFullUsage.Store(enabled)
 }
 
 // Init 初始化：从 PG 加载账号
@@ -812,8 +824,10 @@ func (s *Store) StartBackgroundRefresh() {
 		defer s.wg.Done()
 		refreshTicker := time.NewTicker(2 * time.Minute)
 		autoCleanupTicker := time.NewTicker(30 * time.Second)
+		fullUsageCleanupTicker := time.NewTicker(5 * time.Minute)
 		defer refreshTicker.Stop()
 		defer autoCleanupTicker.Stop()
+		defer fullUsageCleanupTicker.Stop()
 
 		for {
 			select {
@@ -823,6 +837,10 @@ func (s *Store) StartBackgroundRefresh() {
 				s.TriggerRecoveryProbeAsync()
 			case <-autoCleanupTicker.C:
 				s.TriggerAutoCleanupAsync()
+			case <-fullUsageCleanupTicker.C:
+				if s.GetAutoCleanFullUsage() {
+					go s.CleanFullUsageAccounts(context.Background())
+				}
 			case <-s.stopCh:
 				return
 			}
@@ -1254,6 +1272,45 @@ func (s *Store) runAutoCleanupSweep(ctx context.Context) {
 	if cleanedUnauthorized > 0 || cleanedRateLimited > 0 {
 		log.Printf("自动清理完成: unauthorized=%d, rate_limited=%d", cleanedUnauthorized, cleanedRateLimited)
 	}
+}
+
+// CleanFullUsageAccounts 清理用量达到 100% 的账号（跳过正在处理请求的账号）
+func (s *Store) CleanFullUsageAccounts(ctx context.Context) int {
+	accounts := s.Accounts()
+	cleaned := 0
+
+	for _, acc := range accounts {
+		if acc == nil {
+			continue
+		}
+
+		// 跳过正在处理请求的账号
+		if atomic.LoadInt64(&acc.ActiveRequests) > 0 {
+			continue
+		}
+
+		// 检查用量是否 >= 100%
+		pct, valid := acc.GetUsagePercent7d()
+		if !valid || pct < 100.0 {
+			continue
+		}
+
+		if s.db != nil {
+			if err := s.db.SetError(ctx, acc.DBID, "deleted"); err != nil {
+				log.Printf("[账号 %d] 清理用量满账号失败: %v", acc.DBID, err)
+				continue
+			}
+		}
+
+		s.RemoveAccount(acc.DBID)
+		log.Printf("[账号 %d] 用量 %.1f%% 已满，已自动清理 (email=%s)", acc.DBID, pct, acc.Email)
+		cleaned++
+	}
+
+	if cleaned > 0 {
+		log.Printf("用量清理完成: 共清理 %d 个满用量账号", cleaned)
+	}
+	return cleaned
 }
 
 func (s *Store) parallelProbeUsage(ctx context.Context) {

@@ -117,14 +117,14 @@ export default function Operations() {
                     value={formatNumber(overview.requests.active)}
                     sub={`运行期累计 ${formatNumber(overview.requests.total)}`}
                     icon={<Activity className="size-5" />}
-                    tone={overview.requests.active >= 20 ? 'warning' : 'normal'}
+                    tone={overview.requests.active >= Math.max(50, overview.runtime.total_accounts * 0.5) ? 'warning' : 'normal'}
                   />
                   <OpsMetricCard
                     label="协程"
                     value={formatNumber(overview.runtime.goroutines)}
                     sub={`账号池 ${overview.runtime.available_accounts} / ${overview.runtime.total_accounts}`}
                     icon={<Users className="size-5" />}
-                    tone={overview.runtime.goroutines >= 500 ? 'danger' : overview.runtime.goroutines >= 200 ? 'warning' : 'normal'}
+                    tone={overview.runtime.goroutines >= Math.max(1000, overview.runtime.total_accounts * 3) ? 'danger' : overview.runtime.goroutines >= Math.max(500, overview.runtime.total_accounts * 1.5) ? 'warning' : 'normal'}
                   />
                   <OpsMetricCard
                     label="QPS"

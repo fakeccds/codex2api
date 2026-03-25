@@ -683,6 +683,7 @@ type settingsResponse struct {
 	AutoCleanUnauthorized bool   `json:"auto_clean_unauthorized"`
 	AutoCleanRateLimited  bool   `json:"auto_clean_rate_limited"`
 	AdminSecret           string `json:"admin_secret"`
+	AutoCleanFullUsage    bool   `json:"auto_clean_full_usage"`
 }
 
 type updateSettingsReq struct {
@@ -696,6 +697,7 @@ type updateSettingsReq struct {
 	AutoCleanUnauthorized *bool   `json:"auto_clean_unauthorized"`
 	AutoCleanRateLimited  *bool   `json:"auto_clean_rate_limited"`
 	AdminSecret           *string `json:"admin_secret"`
+	AutoCleanFullUsage    *bool   `json:"auto_clean_full_usage"`
 }
 
 // GetSettings 获取当前系统设置
@@ -718,6 +720,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
 		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 		AdminSecret:           adminSecret,
+		AutoCleanFullUsage:    h.store.GetAutoCleanFullUsage(),
 	})
 }
 
@@ -808,6 +811,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		log.Printf("设置已更新: auto_clean_rate_limited = %t", *req.AutoCleanRateLimited)
 	}
 
+	if req.AutoCleanFullUsage != nil {
+		h.store.SetAutoCleanFullUsage(*req.AutoCleanFullUsage)
+		log.Printf("设置已更新: auto_clean_full_usage = %t", *req.AutoCleanFullUsage)
+	}
+
 	// 读取当前 admin_secret（如有更新则使用新值）
 	currentAdminSecret := ""
 	if dbSettings, err := h.db.GetSystemSettings(c.Request.Context()); err == nil && dbSettings != nil {
@@ -830,6 +838,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
 		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 		AdminSecret:           currentAdminSecret,
+		AutoCleanFullUsage:    h.store.GetAutoCleanFullUsage(),
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -850,6 +859,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		AutoCleanUnauthorized: h.store.GetAutoCleanUnauthorized(),
 		AutoCleanRateLimited:  h.store.GetAutoCleanRateLimited(),
 		AdminSecret:           currentAdminSecret,
+		AutoCleanFullUsage:    h.store.GetAutoCleanFullUsage(),
 	})
 }
 
