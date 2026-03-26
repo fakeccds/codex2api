@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -644,6 +645,28 @@ type Store struct {
 	proxyPool        []string // 已启用的代理 URL 列表
 	proxyPoolEnabled bool     // 代理池是否开启
 	proxyRoundRobin  uint64   // 轮询计数器
+
+	// Fast scheduler POC（默认关闭，通过环境变量启用）
+	fastScheduler        atomic.Pointer[FastScheduler]
+	fastSchedulerEnabled atomic.Bool
+}
+
+func fastSchedulerEnabledFromEnv() bool {
+	for _, key := range []string{"FAST_SCHEDULER_ENABLED", "CODEX_FAST_SCHEDULER"} {
+		if truthyEnv(os.Getenv(key)) {
+			return true
+		}
+	}
+	return false
+}
+
+func truthyEnv(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on", "enable", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // NewStore 创建账号管理器
@@ -669,6 +692,11 @@ func NewStore(db *database.DB, tc *cache.TokenCache, settings *database.SystemSe
 	s.autoCleanUnauthorized.Store(settings.AutoCleanUnauthorized)
 	s.autoCleanRateLimited.Store(settings.AutoCleanRateLimited)
 	s.autoCleanFullUsage.Store(settings.AutoCleanFullUsage)
+	s.fastSchedulerEnabled.Store(fastSchedulerEnabledFromEnv())
+	if s.fastSchedulerEnabled.Load() {
+		s.fastScheduler.Store(NewFastScheduler(int64(settings.MaxConcurrency)))
+		log.Printf("Fast scheduler POC 已启用（请求热路径将优先走本地内存调度器）")
+	}
 
 	// 加载代理池
 	if settings.ProxyPoolEnabled {
@@ -685,6 +713,79 @@ func NewStore(db *database.DB, tc *cache.TokenCache, settings *database.SystemSe
 	}
 
 	return s
+}
+
+func (s *Store) getFastScheduler() *FastScheduler {
+	if s == nil || !s.fastSchedulerEnabled.Load() {
+		return nil
+	}
+	return s.fastScheduler.Load()
+}
+
+func (s *Store) rebuildFastScheduler() {
+	if s == nil || !s.fastSchedulerEnabled.Load() {
+		return
+	}
+	s.fastScheduler.Store(s.BuildFastScheduler())
+}
+
+func (s *Store) recomputeAllAccountSchedulerState() {
+	if s == nil {
+		return
+	}
+	baseLimit := atomic.LoadInt64(&s.maxConcurrency)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, acc := range s.accounts {
+		if acc == nil {
+			continue
+		}
+		acc.mu.Lock()
+		acc.recomputeSchedulerLocked(baseLimit)
+		acc.mu.Unlock()
+	}
+}
+
+func (s *Store) fastSchedulerUpdate(acc *Account) {
+	if s == nil || acc == nil {
+		return
+	}
+	scheduler := s.getFastScheduler()
+	if scheduler == nil {
+		return
+	}
+	scheduler.Update(acc)
+}
+
+func (s *Store) fastSchedulerRemove(dbID int64) {
+	if s == nil || dbID == 0 {
+		return
+	}
+	scheduler := s.getFastScheduler()
+	if scheduler == nil {
+		return
+	}
+	scheduler.Remove(dbID)
+}
+
+func (s *Store) SetFastSchedulerEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.fastSchedulerEnabled.Store(enabled)
+	if enabled {
+		s.recomputeAllAccountSchedulerState()
+		s.rebuildFastScheduler()
+		return
+	}
+	s.fastScheduler.Store(nil)
+}
+
+func (s *Store) FastSchedulerEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.fastSchedulerEnabled.Load()
 }
 
 // GetProxyURL 获取全局代理地址
@@ -792,6 +893,7 @@ func (s *Store) Init(ctx context.Context) error {
 
 	// 2. 并行刷新所有账号的 AT
 	s.parallelRefreshAll(ctx)
+	s.rebuildFastScheduler()
 
 	successCount := 0
 	for _, acc := range s.accounts {
@@ -950,6 +1052,10 @@ func (s *Store) CleanByRuntimeStatus(ctx context.Context, targetStatus string) i
 
 // Next 获取下一个可用账号（健康优先 + 低负载择优 + warm 公平调度）
 func (s *Store) Next() *Account {
+	if scheduler := s.getFastScheduler(); scheduler != nil {
+		return scheduler.Acquire()
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -1041,12 +1147,18 @@ func (s *Store) Release(acc *Account) {
 	if acc == nil {
 		return
 	}
+	if scheduler := s.getFastScheduler(); scheduler != nil {
+		scheduler.Release(acc)
+		return
+	}
 	atomic.AddInt64(&acc.ActiveRequests, -1)
 }
 
 // SetMaxConcurrency 动态更新每账号并发上限
 func (s *Store) SetMaxConcurrency(n int) {
 	atomic.StoreInt64(&s.maxConcurrency, int64(n))
+	s.recomputeAllAccountSchedulerState()
+	s.rebuildFastScheduler()
 }
 
 // GetMaxConcurrency 获取当前每账号并发上限
@@ -1079,9 +1191,16 @@ func (s *Store) GetTestConcurrency() int {
 
 // AddAccount 热加载新账号到内存池（前端添加后即刻生效）
 func (s *Store) AddAccount(acc *Account) {
+	if acc == nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	acc.mu.Lock()
+	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.mu.Unlock()
 	s.accounts = append(s.accounts, acc)
+	s.fastSchedulerUpdate(acc)
 }
 
 // RemoveAccount 从内存池移除账号
@@ -1092,6 +1211,7 @@ func (s *Store) RemoveAccount(dbID int64) {
 	for i, acc := range s.accounts {
 		if acc.DBID == dbID {
 			s.accounts = append(s.accounts[:i], s.accounts[i+1:]...)
+			s.fastSchedulerRemove(dbID)
 			return
 		}
 	}
@@ -1145,6 +1265,7 @@ func (s *Store) MarkCooldown(acc *Account, duration time.Duration, reason string
 
 	until := now.Add(duration)
 	acc.SetCooldownUntil(until, reason)
+	s.fastSchedulerUpdate(acc)
 
 	if s.db == nil {
 		return
@@ -1175,6 +1296,7 @@ func (s *Store) ClearCooldown(acc *Account) {
 	}
 	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
 	acc.mu.Unlock()
+	s.fastSchedulerUpdate(acc)
 
 	if s.db == nil {
 		return
@@ -1194,8 +1316,6 @@ func (s *Store) ReportRequestSuccess(acc *Account, latency time.Duration) {
 	}
 
 	acc.mu.Lock()
-	defer acc.mu.Unlock()
-
 	acc.recordLatencyLocked(latency)
 	acc.recordResultLocked(true)
 	acc.LastSuccessAt = time.Now()
@@ -1205,6 +1325,8 @@ func (s *Store) ReportRequestSuccess(acc *Account, latency time.Duration) {
 		acc.HealthTier = HealthTierHealthy
 	}
 	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.mu.Unlock()
+	s.fastSchedulerUpdate(acc)
 }
 
 // ReportRequestFailure 记录一次失败请求，用于动态调度评分
@@ -1215,8 +1337,6 @@ func (s *Store) ReportRequestFailure(acc *Account, kind string, latency time.Dur
 
 	now := time.Now()
 	acc.mu.Lock()
-	defer acc.mu.Unlock()
-
 	acc.recordLatencyLocked(latency)
 	acc.recordResultLocked(false)
 	acc.LastFailureAt = now
@@ -1254,6 +1374,8 @@ func (s *Store) ReportRequestFailure(acc *Account, kind string, latency time.Dur
 	}
 
 	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
+	acc.mu.Unlock()
+	s.fastSchedulerUpdate(acc)
 }
 
 // PersistUsageSnapshot 持久化账号 7d 用量快照
@@ -1614,6 +1736,7 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 		}
 		acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
 		acc.mu.Unlock()
+		s.fastSchedulerUpdate(acc)
 		if expiredCooldown {
 			_ = s.db.ClearCooldown(ctx, dbID)
 		}
@@ -1643,6 +1766,7 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 			}
 			acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
 			acc.mu.Unlock()
+			s.fastSchedulerUpdate(acc)
 			if expiredCooldown {
 				_ = s.db.ClearCooldown(ctx, dbID)
 			}
@@ -1660,6 +1784,7 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 			acc.Status = StatusError
 			acc.ErrorMsg = err.Error()
 			acc.mu.Unlock()
+			s.fastSchedulerUpdate(acc)
 
 			_ = s.db.SetError(ctx, dbID, err.Error())
 		}
@@ -1688,6 +1813,7 @@ func (s *Store) refreshAccount(ctx context.Context, acc *Account) error {
 	}
 	acc.recomputeSchedulerLocked(atomic.LoadInt64(&s.maxConcurrency))
 	acc.mu.Unlock()
+	s.fastSchedulerUpdate(acc)
 
 	// 5. 写入 Redis 缓存
 	ttl := time.Until(td.ExpiresAt) - 5*time.Minute
