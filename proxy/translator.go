@@ -26,22 +26,28 @@ func TranslateRequest(rawJSON []byte) ([]byte, error) {
 	result, _ = sjson.SetBytes(result, "stream", true)
 	result, _ = sjson.SetBytes(result, "store", false)
 
-	// 3. 删除 Codex 不支持的字段
+	// 3. 将 reasoning_effort 转换为 Codex 的 reasoning.effort
+	if re := gjson.GetBytes(result, "reasoning_effort"); re.Exists() && !gjson.GetBytes(result, "reasoning.effort").Exists() {
+		result, _ = sjson.SetBytes(result, "reasoning.effort", re.String())
+	}
+
+	// 4. 删除 Codex 不支持的字段
 	unsupportedFields := []string{
 		"max_tokens", "max_completion_tokens", "temperature", "top_p",
 		"frequency_penalty", "presence_penalty", "logprobs", "top_logprobs",
 		"n", "seed", "stop", "user", "logit_bias", "response_format",
-		"service_tier", "stream_options", "truncation", "context_management",
-		"disable_response_storage",
+		"service_tier", "serviceTier", "stream_options", "truncation",
+		"context_management", "disable_response_storage", "verbosity",
+		"reasoning_effort",
 	}
 	for _, field := range unsupportedFields {
 		result, _ = sjson.DeleteBytes(result, field)
 	}
 
-	// 4. system → developer 角色转换
+	// 5. system → developer 角色转换
 	result = convertSystemRoleToDeveloper(result)
 
-	// 5. 添加 include
+	// 6. 添加 include
 	result, _ = sjson.SetBytes(result, "include", []string{"reasoning.encrypted_content"})
 
 	return result, nil

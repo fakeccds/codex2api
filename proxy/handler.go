@@ -115,6 +115,11 @@ func extractReasoningEffort(body []byte) string {
 	return ""
 }
 
+// extractServiceTier 从请求体提取服务等级
+func extractServiceTier(body []byte) string {
+	return gjson.GetBytes(body, "service_tier").String()
+}
+
 func classifyTransportFailure(err error) string {
 	if err == nil {
 		return ""
@@ -287,6 +292,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	isStream := gjson.GetBytes(rawBody, "stream").Bool()
 	sessionID := ResolveSessionID(c.GetHeader("Authorization"), rawBody)
 	reasoningEffort := extractReasoningEffort(rawBody)
+	serviceTier := extractServiceTier(rawBody)
 
 	// 2. 注入/修正 Codex 必需字段
 	codexBody := rawBody
@@ -314,9 +320,9 @@ func (h *Handler) Responses(c *gin.Context) {
 		"max_output_tokens", "max_tokens", "max_completion_tokens",
 		"temperature", "top_p", "frequency_penalty", "presence_penalty",
 		"logprobs", "top_logprobs", "n", "seed", "stop", "user",
-		"logit_bias", "response_format", "service_tier", "stream_options",
-		"reasoning_effort", "truncation", "context_management",
-		"disable_response_storage",
+		"logit_bias", "response_format", "service_tier", "serviceTier",
+		"stream_options", "reasoning_effort", "truncation", "context_management",
+		"disable_response_storage", "verbosity",
 	}
 	for _, field := range unsupportedFields {
 		codexBody, _ = sjson.DeleteBytes(codexBody, field)
@@ -377,6 +383,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				InboundEndpoint:  "/v1/responses",
 				UpstreamEndpoint: "/v1/responses",
 				Stream:           isStream,
+				ServiceTier:      serviceTier,
 			})
 			h.applyCooldown(account, resp.StatusCode, errBody, resp)
 
@@ -542,6 +549,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			InboundEndpoint:  "/v1/responses",
 			UpstreamEndpoint: "/v1/responses",
 			Stream:           isStream,
+			ServiceTier:      serviceTier,
 		}
 		if usage != nil {
 			logInput.PromptTokens = usage.PromptTokens
@@ -594,6 +602,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	}
 	isStream := gjson.GetBytes(rawBody, "stream").Bool()
 	reasoningEffort := extractReasoningEffort(rawBody)
+	serviceTier := extractServiceTier(rawBody)
 
 	// 2. 翻译请求：OpenAI Chat → Codex Responses
 	codexBody, err := TranslateRequest(rawBody)
@@ -661,6 +670,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				InboundEndpoint:  "/v1/chat/completions",
 				UpstreamEndpoint: "/v1/responses",
 				Stream:           isStream,
+				ServiceTier:      serviceTier,
 			})
 			h.applyCooldown(account, resp.StatusCode, errBody, resp)
 
@@ -845,6 +855,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			InboundEndpoint:  "/v1/chat/completions",
 			UpstreamEndpoint: "/v1/responses",
 			Stream:           isStream,
+			ServiceTier:      serviceTier,
 		}
 		if usage != nil {
 			logInput.PromptTokens = usage.PromptTokens
